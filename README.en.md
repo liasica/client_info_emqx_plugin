@@ -52,6 +52,7 @@ The configuration is stored as a JSON array. Each element contains a `topic` and
 
 - `enabled` is on by default (missing or `null` is treated as enabled)
 - A topic entry is disabled only when `enabled` is explicitly `false`
+- In some Dashboard/Avro union cases, `enabled` may be serialized as `{"boolean": true|false}`, which is semantically equivalent to a plain boolean
 
 ```json
 [
@@ -59,6 +60,13 @@ The configuration is stored as a JSON array. Each element contains a `topic` and
   { "topic": "device/+/status", "enabled": false }
 ]
 ```
+
+## Troubleshooting
+
+- Symptom: the UI shows "Disabled" while `enabled` appears to be an enabled value in raw config
+- Cause: in Avro union scenarios, Dashboard may use wrapped values like `{"boolean": true}`
+- Note: `true` and `{"boolean": true}` are semantically equivalent, and the plugin treats both as enabled
+- Recommendation: prefer toggling and saving through the UI; if editing raw config manually, use the union-wrapped form for consistent UI display
 
 ## Development
 

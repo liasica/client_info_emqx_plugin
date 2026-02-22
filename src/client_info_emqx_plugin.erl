@@ -1,7 +1,8 @@
 -module(client_info_emqx_plugin).
 
 -define(PLUGIN_NAME, "client_info_emqx_plugin").
--define(PLUGIN_VSN, "1.1.0").
+-define(PLUGIN_VSN, "1.1.1").
+-define(CONFIG_REWRITE_DELAY_MS, 10).
 
 %% Magic header bytes: 0x01, 0x35, 0x83, 0x08
 -define(MAGIC_HEADER, <<16#01, 16#35, 16#83, 16#08>>).
@@ -86,10 +87,7 @@ on_message_publish(#message{topic = Topic, payload = Payload, headers = Headers,
 
 %% null / missing => enabled by default, only explicit false => disabled
 is_enabled(Item) ->
-    case enabled_to_bool(maps:get(<<"enabled">>, Item, true)) of
-        false -> false;
-        _ -> true
-    end.
+    enabled_to_bool(maps:get(<<"enabled">>, Item, true)).
 
 %% Check if Topic matches any pattern in the managed topics list (supports MQTT wildcards)
 is_managed_topic(_Topic, []) ->
@@ -185,40 +183,50 @@ normalize_topic_item(Item) when is_map(Item) ->
     Enabled = enabled_to_bool(maps:get(<<"enabled">>, Item, undefined)),
     %% Keep Avro union form for Dashboard rendering compatibility
     Item#{<<"enabled">> => #{<<"boolean">> => Enabled}};
-normalize_topic_item(_Item) ->
+normalize_topic_item(Item) ->
+    ?SLOG(warning, #{
+        msg => "client_info_emqx_plugin_normalize_topic_item_malformed",
+        item => Item
+    }),
     #{<<"enabled">> => #{<<"boolean">> => true}}.
 
-enabled_to_bool(false) ->
-    false;
-enabled_to_bool(<<"false">>) ->
-    false;
-enabled_to_bool("false") ->
-    false;
-enabled_to_bool(#{<<"boolean">> := false}) ->
-    false;
-enabled_to_bool(#{boolean := false}) ->
-    false;
-enabled_to_bool(#{<<"boolean">> := true}) ->
-    true;
-enabled_to_bool(#{boolean := true}) ->
-    true;
-enabled_to_bool(#{<<"null">> := null}) ->
-    true;
-enabled_to_bool(#{null := null}) ->
-    true;
-enabled_to_bool(null) ->
-    true;
-enabled_to_bool(undefined) ->
-    true;
-enabled_to_bool(_) ->
-    true.
+enabled_to_bool(Value0) ->
+    Value = unwrap_enabled_value(Value0),
+    case Value of
+        false -> false;
+        <<"false">> -> false;
+        "false" -> false;
+        true -> true;
+        null -> true;
+        undefined -> true;
+        Other ->
+            ?SLOG(warning, #{
+                msg => "client_info_emqx_plugin_enabled_unexpected_value",
+                value => Other
+            }),
+            true
+    end.
+
+%% Dashboard may serialize Avro union fields as wrapped maps, e.g.
+%% #{<<"boolean">> => true} / #{<<"null">> => null}.
+%% Unwrap first so downstream logic can stay on plain values.
+unwrap_enabled_value(#{<<"boolean">> := Bool}) ->
+    Bool;
+unwrap_enabled_value(#{boolean := Bool}) ->
+    Bool;
+unwrap_enabled_value(#{<<"null">> := null}) ->
+    null;
+unwrap_enabled_value(#{null := null}) ->
+    null;
+unwrap_enabled_value(Value) ->
+    Value.
 
 maybe_schedule_config_rewrite(Config, Config) ->
     ok;
 maybe_schedule_config_rewrite(_Config, NormalizedConfig) ->
     PluginNameVsn = <<?PLUGIN_NAME, "-", ?PLUGIN_VSN>>,
     _ = spawn(fun() ->
-        timer:sleep(10),
+        timer:sleep(?CONFIG_REWRITE_DELAY_MS),
         case catch emqx_plugins:update_config(PluginNameVsn, NormalizedConfig) of
             ok ->
                 ?SLOG(info, #{

@@ -52,6 +52,7 @@ IPv4 `192.168.1.100`（4 字节）+ ClientId `dev-01`（6 字节）：
 
 - `enabled` 默认启用（缺失或为 `null` 时视为启用）
 - 仅当 `enabled` 显式为 `false` 时，该条目被禁用
+- 在部分 Dashboard/Avro union 场景下，`enabled` 可能被序列化为 `{"boolean": true|false}`，与布尔值语义等价
 
 ```json
 [
@@ -59,6 +60,13 @@ IPv4 `192.168.1.100`（4 字节）+ ClientId `dev-01`（6 字节）：
   { "topic": "device/+/status", "enabled": false }
 ]
 ```
+
+## 故障排查
+
+- 现象：界面显示“未启用”，但配置中 `enabled` 看起来是启用值
+- 原因：Dashboard 在 Avro union 场景下可能使用 `{"boolean": true}` 这类包装格式
+- 说明：`true` 与 `{"boolean": true}` 语义等价，插件会按“启用”处理
+- 建议：优先通过界面开关修改并保存；如需手工编辑配置，建议使用 union 包装格式保持显示一致
 
 ## 开发
 
