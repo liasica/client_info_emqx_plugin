@@ -29,13 +29,14 @@ jobs:
         run: echo "version=$(cat VERSION)" >> $GITHUB_OUTPUT
 
       - name: Generate changelog
-        id: generate_changelog
+        id: changelog
         uses: mikepenz/release-changelog-builder-action@v6
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           mode: 'COMMIT'
           configuration: 'changelog.configure.json'
+          failOnError: false
 
       - name: Upload release asset
         uses: softprops/action-gh-release@v2
