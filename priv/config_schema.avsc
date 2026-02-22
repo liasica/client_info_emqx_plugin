@@ -1,0 +1,20 @@
+{
+  "type": "record",
+  "name": "ExtendedConfig",
+  "fields": [
+    {
+      "name": "managed_topics",
+      "type": {
+        "type": "array",
+        "items": "string"
+      },
+      "default": [],
+      "$ui": {
+        "component": "input-array",
+        "flex": 24,
+        "label": "$managed_topics_label",
+        "description": "$managed_topics_desc"
+      }
+    }
+  ]
+}

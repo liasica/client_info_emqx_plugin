@@ -1,0 +1,11 @@
+{application, client_info_emqx_plugin, [
+    {description, "客户端连接信息插件"},
+    {vsn, {file, "VERSION"}},
+    {modules, []},
+    {registered, [client_info_emqx_plugin_sup]},
+    {applications, [kernel, stdlib, emqx_plugin_helper]},
+    {mod, {client_info_emqx_plugin_app, []}},
+    {env, []},
+    {licenses, ["Apache-2.0"]},
+    {maintainers, ["liasica <magicrolan@qq.com>"]}
+]}.
