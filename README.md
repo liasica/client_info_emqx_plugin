@@ -1,65 +1,108 @@
 # client_info_emqx_plugin
 
-> 客户端连接信息插件
+> MQTT 消息客户端信息注入插件
 
-一个附加客户端信息的EMQX插件，包含客户端IP地址、连接时间、协议类型等信息，附加前缀字节为 `0x12, 0x, 0x83, 0x08`
-目前已附加：
-  - clientid
-  - peerhost
+一个 EMQX 插件，当消息发布到指定 Topic 时，自动将客户端的 IP 地址和 ClientId 以二进制头部的形式注入到 Payload 开头，便于下游服务无需额外查询即可识别消息来源。
+
+## 功能特性
+
+- 根据配置的 Topic 列表（支持 MQTT 通配符 `#` 和 `+`）过滤消息
+- 每个 Topic 可独立启用/禁用，无需修改配置即可快速切换
+- 在原始 Payload 前附加固定 Magic 头部 + 客户端 IP + ClientId
+- 支持 IPv4（4 字节）和 IPv6（16 字节）
 
 ## 附加数据结构
-```
-| 0x01 0x35 0x83 0x08 | 0xNN 0xNN 0xNN 0xNN |  peerhost   |  clientid  | original payload |
-|      Magic (4B)     |  len = N+M (4B, BE) |   4 or 16B  |    M bytes |                  |
-```
-
-例如 IPv4 192.168.1.100（4字节）+ ClientId "dev-01"（6字节）：
 
 ```
-01 35 83 08  00 00 00 0A  C0 A8 01 64  64 65 76 2D 30 31  <原始payload>
-             ↑ len = 10 (4+6)
+| 0x01 0x35 0x83 0x08 | 0xNN 0xNN 0xNN 0xNN |  peerhost   |   clientid   | original payload |
+|      Magic (4B)     | len = N+M (4B, BE)  |  4 or 16B   |    M bytes   |                  |
+```
+
+- **Magic**：固定标识字节 `0x01 0x35 0x83 0x08`
+- **len**：4 字节大端无符号整数，值 = `byte_size(peerhost) + byte_size(clientid)`，不含 Magic 和 len 自身
+- **peerhost**：IPv4 为 4 字节，IPv6 为 16 字节
+- **clientid**：UTF-8 编码的客户端 ID 字节序列
+
+### 示例
+
+IPv4 `192.168.1.100`（4 字节）+ ClientId `dev-01`（6 字节）：
+
+```
+01 35 83 08  00 00 00 0A  C0 A8 01 64  64 65 76 2D 30 31  <原始 payload>
+             ↑ len=10(4+6) ↑ 192.168.1.100               ↑ "dev-01"
 ```
 
 ## 使用方法
-1. 安装该插件并启用
-2. 进入插件配置界面，设置 `管理的Topic列表` ，以逗号分隔，例如 `client/info/#,test/topic`
-3. 发布消息到这些Topic，例如 `client/info/123`，消息内容可以是任意的payload，插件会自动附加客户端信息并转发到EMQX的消息处理流程中
 
-## IDE配置
-![Xnip2025-11-13_14-13-13.png](docs/Xnip2025-11-13_14-13-13.png)
-![Xnip2025-11-13_14-14-04.png](docs/Xnip2025-11-13_14-14-04.png)
+1. 执行 `make rel` 构建插件包，或从 [Releases](../../releases) 下载最新版本
+2. 在 EMQX Dashboard 中上传并安装插件
+3. 启用插件后进入 **管理插件** 配置界面
+4. 在 **管理的 Topic 列表** 表格中添加需要处理的 Topic，并设置启用状态：
 
-## 文档
+   | 字段    | 说明                                   |
+   | ------- | -------------------------------------- |
+   | Topic   | MQTT Topic，支持通配符，如 `client/#`  |
+   | Enabled | 开关，控制该条目是否参与消息头附加处理 |
 
-- [插件扩展](https://docs.emqx.com/zh/emqx/latest/extensions/plugins.html)
-- [.tool-versions](https://github.com/emqx/emqx/blob/e6.0.1/.tool-versions)
+5. 点击 **保存修改**，配置立即生效（无需重启插件）
 
-```shell
-# 更新依赖
-rebar3 local install
-rebar3 local upgrade
-rebar3 upgrade --all
+## 配置说明
 
-# 构建
-make rel
+配置存储格式为 JSON 数组，每个元素包含 `topic` 和 `enabled` 两个字段：
+
+- `enabled` 默认启用（缺失或为 `null` 时视为启用）
+- 仅当 `enabled` 显式为 `false` 时，该条目被禁用
+
+```json
+[
+  { "topic": "client/#", "enabled": true },
+  { "topic": "device/+/status", "enabled": false }
+]
 ```
 
-## Release
+## 开发
 
-1. A JSON format metadata file describing the plugin
-2. Versioned directories for all applications needed for this plugin (source and binaries).
-3. Confirm the OTP version used by EMQX that the plugin will be installed on (See also [./.tool-versions](./.tool-versions)).
+### 环境要求
 
-In a shell from this plugin's working directory execute `make rel` to have the package created like:
+- Erlang/OTP 28+
+- rebar3（`make ensure-rebar3` 自动下载）
+
+### 常用命令
+
+```shell
+# 下载/更新依赖
+rebar3 upgrade --all
+
+# 编译
+make compile
+
+# 构建插件包
+make rel
+
+# 格式化代码
+make fmt
+
+# 运行单元测试
+make eunit
+
+# 运行 CT 测试
+make ct
+```
+
+### 构建产物
 
 ```
 _build/default/emqx_plugrel/client_info_emqx_plugin-<vsn>.tar.gz
-```
-## Format
-
-Format all the files in your project by running:
-```
-make fmt
+_build/default/emqx_plugrel/client_info_emqx_plugin-<vsn>.sha256
 ```
 
-See [EMQX documentation](https://docs.emqx.com/en/enterprise/v5.0/extensions/plugins.html) for details on how to deploy custom plugins.
+## IDE 配置
+
+![Xnip2025-11-13_14-13-13.png](docs/Xnip2025-11-13_14-13-13.png)
+![Xnip2025-11-13_14-14-04.png](docs/Xnip2025-11-13_14-14-04.png)
+
+## 参考文档
+
+- [EMQX 插件扩展文档](https://docs.emqx.com/zh/emqx/latest/extensions/plugins.html)
+- [EMQX .tool-versions](https://github.com/emqx/emqx/blob/e6.0.1/.tool-versions)
+- [emqx-plugin-helper](https://github.com/emqx/emqx-plugin-helper)

@@ -1,7 +1,7 @@
 -module(client_info_emqx_plugin).
 
 -define(PLUGIN_NAME, "client_info_emqx_plugin").
--define(PLUGIN_VSN, "1.0.0").
+-define(PLUGIN_VSN, "1.1.0").
 
 %% Magic header bytes: 0x01, 0x35, 0x83, 0x08
 -define(MAGIC_HEADER, <<16#01, 16#35, 16#83, 16#08>>).
@@ -51,26 +51,19 @@ unhook() ->
 
 on_client_connect(ConnInfo, Props, []) ->
     Config = get_config(),
-    ManagedTopics = maps:get(<<"managed_topics">>, Config, []),
+    TopicItems = maps:get(<<"topics">>, Config, []),
+    EnabledTopics = [maps:get(<<"topic">>, Item) || Item <- TopicItems, is_enabled(Item)],
     ?SLOG(debug, #{
         msg => "client_info_emqx_plugin_on_client_connect",
         conninfo => ConnInfo,
-        managed_topics => ManagedTopics
+        enabled_topics => EnabledTopics
     }),
     {ok, Props}.
 
-%% @doc
-%% Called when a message is published.
-%% If the topic matches any configured managed topic,
-%% prepend the following header to the payload:
-%%   [0x01, 0x35, 0x83, 0x08] ++ [4-byte big-endian total-appended-length] ++ peerhost ++ clientid
-%%
-%% The 4-byte length field encodes the total length of the appended prefix,
-%% i.e., 4 (magic) + 4 (length field itself) + byte_size(peerhost) + byte_size(clientid).
 on_message_publish(#message{topic = Topic, payload = Payload, headers = Headers, from = From} = Msg) ->
     Config = get_config(),
-    %% managed_topics is a plain list of binary strings: [<<"/client/#">>, ...]
-    ManagedTopics = maps:get(<<"managed_topics">>, Config, []),
+    TopicItems = maps:get(<<"topics">>, Config, []),
+    ManagedTopics = [maps:get(<<"topic">>, Item) || Item <- TopicItems, is_enabled(Item)],
     case is_managed_topic(Topic, ManagedTopics) of
         true ->
             PeerHost = format_peerhost(maps:get(peerhost, Headers, undefined)),
@@ -90,6 +83,13 @@ on_message_publish(#message{topic = Topic, payload = Payload, headers = Headers,
 %%--------------------------------------------------------------------
 %% Internal functions
 %%--------------------------------------------------------------------
+
+%% null / missing => enabled by default, only explicit false => disabled
+is_enabled(Item) ->
+    case enabled_to_bool(maps:get(<<"enabled">>, Item, true)) of
+        false -> false;
+        _ -> true
+    end.
 
 %% Check if Topic matches any pattern in the managed topics list (supports MQTT wildcards)
 is_managed_topic(_Topic, []) ->
@@ -122,9 +122,7 @@ format_clientid(_) ->
 %%   Magic(4) + Length(4) + PeerHost(N) + ClientId(M) + OriginalPayload
 %% Length = byte_size(PeerHost) + byte_size(ClientId)  (excludes magic and length field itself)
 prepend_header(PeerHost, ClientId, Payload) ->
-    PeerHostSize = byte_size(PeerHost),
-    ClientIdSize = byte_size(ClientId),
-    TotalLen = PeerHostSize + ClientIdSize,
+    TotalLen = byte_size(PeerHost) + byte_size(ClientId),
     <<?MAGIC_HEADER/binary, TotalLen:32/big-unsigned-integer, PeerHost/binary, ClientId/binary, Payload/binary>>.
 
 %%--------------------------------------------------------------------
@@ -132,20 +130,19 @@ prepend_header(PeerHost, ClientId, Payload) ->
 %%--------------------------------------------------------------------
 
 on_health_check(_Options) ->
-    case get_config() of
-        #{<<"managed_topics">> := _} -> ok;
-        _ -> {error, <<"Invalid config, missing managed_topics">>}
-    end.
+    ok.
 
 on_config_changed(_OldConfig, NewConfig) ->
-    ok = gen_server:cast(?MODULE, {on_changed, NewConfig}).
+    NormalizedConfig = normalize_config(NewConfig),
+    maybe_schedule_config_rewrite(NewConfig, NormalizedConfig),
+    ok = gen_server:cast(?MODULE, {on_changed, NormalizedConfig}).
 
 %%--------------------------------------------------------------------
 %% Working with config
 %%--------------------------------------------------------------------
 
 get_config() ->
-    persistent_term:get(?MODULE, #{}).
+    persistent_term:get(?MODULE, #{<<"topics">> => []}).
 
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
@@ -153,7 +150,7 @@ start_link() ->
 init([]) ->
     erlang:process_flag(trap_exit, true),
     PluginNameVsn = <<?PLUGIN_NAME, "-", ?PLUGIN_VSN>>,
-    Config = emqx_plugin_helper:get_config(PluginNameVsn),
+    Config = normalize_config(emqx_plugin_helper:get_config(PluginNameVsn)),
     ?SLOG(debug, #{
         msg => "client_info_emqx_plugin_init",
         config => Config
@@ -175,4 +172,77 @@ handle_info(_Request, State) ->
 
 terminate(_Reason, _State) ->
     persistent_term:erase(?MODULE),
+    ok.
+
+normalize_config(Config) when is_map(Config) ->
+    TopicItems = maps:get(<<"topics">>, Config, []),
+    NormalizedTopics = [normalize_topic_item(Item) || Item <- TopicItems],
+    Config#{<<"topics">> => NormalizedTopics};
+normalize_config(_Config) ->
+    #{<<"topics">> => []}.
+
+normalize_topic_item(Item) when is_map(Item) ->
+    Enabled = enabled_to_bool(maps:get(<<"enabled">>, Item, undefined)),
+    %% Keep Avro union form for Dashboard rendering compatibility
+    Item#{<<"enabled">> => #{<<"boolean">> => Enabled}};
+normalize_topic_item(_Item) ->
+    #{<<"enabled">> => #{<<"boolean">> => true}}.
+
+enabled_to_bool(false) ->
+    false;
+enabled_to_bool(<<"false">>) ->
+    false;
+enabled_to_bool("false") ->
+    false;
+enabled_to_bool(#{<<"boolean">> := false}) ->
+    false;
+enabled_to_bool(#{boolean := false}) ->
+    false;
+enabled_to_bool(#{<<"boolean">> := true}) ->
+    true;
+enabled_to_bool(#{boolean := true}) ->
+    true;
+enabled_to_bool(#{<<"null">> := null}) ->
+    true;
+enabled_to_bool(#{null := null}) ->
+    true;
+enabled_to_bool(null) ->
+    true;
+enabled_to_bool(undefined) ->
+    true;
+enabled_to_bool(_) ->
+    true.
+
+maybe_schedule_config_rewrite(Config, Config) ->
+    ok;
+maybe_schedule_config_rewrite(_Config, NormalizedConfig) ->
+    PluginNameVsn = <<?PLUGIN_NAME, "-", ?PLUGIN_VSN>>,
+    _ = spawn(fun() ->
+        timer:sleep(10),
+        case catch emqx_plugins:update_config(PluginNameVsn, NormalizedConfig) of
+            ok ->
+                ?SLOG(info, #{
+                    msg => "client_info_emqx_plugin_config_rewritten",
+                    plugin => PluginNameVsn
+                });
+            {error, Reason} ->
+                ?SLOG(warning, #{
+                    msg => "client_info_emqx_plugin_config_rewrite_failed",
+                    plugin => PluginNameVsn,
+                    reason => Reason
+                });
+            {'EXIT', Reason} ->
+                ?SLOG(warning, #{
+                    msg => "client_info_emqx_plugin_config_rewrite_exit",
+                    plugin => PluginNameVsn,
+                    reason => Reason
+                });
+            Other ->
+                ?SLOG(warning, #{
+                    msg => "client_info_emqx_plugin_config_rewrite_unexpected",
+                    plugin => PluginNameVsn,
+                    result => Other
+                })
+        end
+    end),
     ok.

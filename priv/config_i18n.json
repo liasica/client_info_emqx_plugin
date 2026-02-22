@@ -1,11 +1,11 @@
 {
-  "$managed_topics_label": {
-    "zh": "管理的 Topic 列表",
-    "en": "Managed Topics"
+  "$topics_label": {
+    "zh": "Topic 列表",
+    "en": "Topics"
   },
-  "$managed_topics_desc": {
-    "zh": "需要被管理的 MQTT Topic 列表，支持通配符（如 sensor/# 或 device/+/status），以逗号为分隔。",
-    "en": "List of MQTT topics to be managed. Wildcards are supported, e.g. sensor/# or device/+/status."
+  "$topics_desc": {
+    "zh": "需要注入客户端信息的 MQTT Topic 列表，支持通配符（如 sensor/# 或 device/+/status）。",
+    "en": "List of MQTT topics to inject client info into. Wildcards are supported, e.g. sensor/# or device/+/status."
   },
   "$topic_label": {
     "zh": "Topic",
@@ -14,5 +14,13 @@
   "$topic_desc": {
     "zh": "MQTT Topic，支持通配符 # 和 +。",
     "en": "MQTT topic, supports wildcards # and +."
+  },
+  "$enabled_label": {
+    "zh": "启用",
+    "en": "Enabled"
+  },
+  "$enabled_desc": {
+    "zh": "是否对该 Topic 启用客户端信息注入。",
+    "en": "Whether to enable client info injection for this topic."
   }
 }

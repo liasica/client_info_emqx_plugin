@@ -3,17 +3,46 @@
   "name": "ExtendedConfig",
   "fields": [
     {
-      "name": "managed_topics",
+      "name": "topics",
       "type": {
         "type": "array",
-        "items": "string"
+        "items": {
+          "type": "record",
+          "name": "TopicItem",
+          "fields": [
+            { "name": "topic", "type": "string" },
+            {
+              "name": "enabled",
+              "type": ["boolean", "null"],
+              "default": true
+            }
+          ]
+        }
       },
       "default": [],
       "$ui": {
-        "component": "input-array",
+        "component": "maps-editor",
         "flex": 24,
-        "label": "$managed_topics_label",
-        "description": "$managed_topics_desc"
+        "label": "$topics_label",
+        "description": "$topics_desc",
+        "items": {
+          "topic": {
+            "required": true,
+            "label": "$topic_label",
+            "description": "$topic_desc",
+            "type": "string",
+            "flex": 20
+          },
+          "enabled": {
+            "component": "switch",
+            "label": "$enabled_label",
+            "description": "$enabled_desc",
+            "type": "boolean",
+            "default": true,
+            "required": true,
+            "flex": 4
+          }
+        }
       }
     }
   ]
