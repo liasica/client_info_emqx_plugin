@@ -1,7 +1,7 @@
 -module(client_info_emqx_plugin).
 
 -define(PLUGIN_NAME, "client_info_emqx_plugin").
--define(PLUGIN_VSN, "1.1.1").
+-define(PLUGIN_VSN, "1.2.0").
 -define(CONFIG_REWRITE_DELAY_MS, 10).
 
 %% Magic header bytes: 0x01, 0x35, 0x83, 0x08
@@ -116,12 +116,23 @@ format_clientid(ClientId) when is_atom(ClientId) ->
 format_clientid(_) ->
     <<>>.
 
-%% Build the prepended payload:
-%%   Magic(4) + Length(4) + PeerHost(N) + ClientId(M) + OriginalPayload
-%% Length = byte_size(PeerHost) + byte_size(ClientId)  (excludes magic and length field itself)
+%% Build the prepended payload (extensible length-prefixed format):
+%%   Magic(4) + FieldCount(1) + [FieldLen(2, big-endian) + FieldData(N)] × FieldCount + OriginalPayload
+%% Current fields (in order):
+%%   Field 0 : PeerHost  – IPv4: 4 bytes | IPv6: 16 bytes | other: raw binary
+%%   Field 1 : ClientId  – UTF-8 binary
+%% To add more fields in the future, append them to the Fields list; the
+%% FieldCount byte and per-field length prefix allow decoders to skip
+%% unknown or future fields without ambiguity.
 prepend_header(PeerHost, ClientId, Payload) ->
-    TotalLen = byte_size(PeerHost) + byte_size(ClientId),
-    <<?MAGIC_HEADER/binary, TotalLen:32/big-unsigned-integer, PeerHost/binary, ClientId/binary, Payload/binary>>.
+    Fields = [PeerHost, ClientId],
+    FieldCount = length(Fields),
+    EncodedFields = encode_fields(Fields),
+    <<?MAGIC_HEADER/binary, FieldCount:8/big-unsigned-integer, EncodedFields/binary, Payload/binary>>.
+
+%% Encode a list of binaries as [Len(2) + Data(N)] concatenated.
+encode_fields(Fields) ->
+    << <<(byte_size(F)):16/big-unsigned-integer, F/binary>> || F <- Fields >>.
 
 %%--------------------------------------------------------------------
 %% Plugin callbacks

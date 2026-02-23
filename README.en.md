@@ -13,24 +13,54 @@ An EMQX plugin that automatically injects client information (IP address and Cli
 
 ## Payload Structure
 
+An extensible **field-count + per-field length-prefix** format is used. Adding new fields in the future requires no changes to existing parsers.
+
 ```
-| 0x01 0x35 0x83 0x08 | 0xNN 0xNN 0xNN 0xNN |  peerhost   |   clientid   | original payload |
-|      Magic (4B)     | len = N+M (4B, BE)  |  4 or 16B   |    M bytes   |                  |
++--------------------+-------------+-------------------------------+-------------------------------+------------------+
+| Magic (4B)         | Count (1B)  | FieldLen[0] (2B, BE)          | FieldLen[1] (2B, BE)          |                  |
+| 01 35 83 08        | # of fields | Field[0] data (FieldLen[0]B)  | Field[1] data (FieldLen[1]B)  | original payload |
++--------------------+-------------+-------------------------------+-------------------------------+------------------+
 ```
 
-- **Magic**: Fixed identifier bytes `0x01 0x35 0x83 0x08`
-- **len**: 4-byte big-endian unsigned integer = `byte_size(peerhost) + byte_size(clientid)`, excluding the Magic bytes and the len field itself
-- **peerhost**: 4 bytes for IPv4, 16 bytes for IPv6
-- **clientid**: Client ID encoded as UTF-8 bytes
+| Segment     | Size          | Description                            |
+| ----------- | ------------- | -------------------------------------- |
+| Magic       | 4 bytes       | Fixed identifier `0x01 0x35 0x83 0x08` |
+| FieldCount  | 1 byte        | Total number of fields (currently `2`) |
+| FieldLen[i] | 2 bytes (BE)  | Byte length of the i-th field          |
+| Field[i]    | FieldLen[i] B | Data of the i-th field                 |
+| Payload     | remainder     | Original MQTT message payload          |
+
+**Current fields (in order):**
+
+| Index | Field    | Encoding                      |
+| ----- | -------- | ----------------------------- |
+| 0     | peerhost | IPv4: 4 bytes; IPv6: 16 bytes |
+| 1     | clientid | Client ID as UTF-8 bytes      |
 
 ### Example
 
 IPv4 `192.168.1.100` (4 bytes) + ClientId `dev-01` (6 bytes):
 
 ```
-01 35 83 08  00 00 00 0A  C0 A8 01 64  64 65 76 2D 30 31  <original payload>
-             ↑ len=10(4+6) ↑ 192.168.1.100               ↑ "dev-01"
+01 35 83 08        -- Magic
+02                 -- FieldCount = 2
+00 04              -- Field[0] len = 4 (peerhost, IPv4)
+C0 A8 01 64        -- 192.168.1.100
+00 06              -- Field[1] len = 6 (clientid)
+64 65 76 2D 30 31  -- "dev-01"
+<original payload>
 ```
+
+### Extensibility
+
+Parsers only need to follow these steps:
+
+1. Read and verify the 4-byte Magic
+2. Read 1 byte `FieldCount`
+3. Loop `FieldCount` times: read 2-byte length → read that many bytes of data
+4. All remaining bytes are the original Payload
+
+New fields can be appended to the list at any time; older parsers can safely skip unknown fields.
 
 ## Usage
 
